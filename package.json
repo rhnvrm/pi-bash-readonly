@@ -1,0 +1,41 @@
+{
+  "name": "pi-bash-readonly",
+  "version": "0.1.0",
+  "description": "Sandboxed read-only bash for Pi agents via bwrap",
+  "type": "module",
+  "license": "MIT",
+  "author": "rhnvrm",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/rhnvrm/pi-bash-readonly.git"
+  },
+  "homepage": "https://github.com/rhnvrm/pi-bash-readonly#readme",
+  "keywords": [
+    "pi-package",
+    "pi",
+    "pi-coding-agent",
+    "extension",
+    "sandbox",
+    "bwrap",
+    "read-only",
+    "security"
+  ],
+  "pi": {
+    "extensions": [
+      "./extensions/index.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@mariozechner/pi-coding-agent": "^0.62.0",
+    "@sinclair/typebox": "^0.34.48"
+  },
+  "files": [
+    "extensions/",
+    "config.ts",
+    "README.md",
+    "LICENSE"
+  ],
+  "devDependencies": {
+    "bun-types": "^1.3.11"
+  }
+}
