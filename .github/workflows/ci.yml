@@ -17,11 +17,16 @@ jobs:
         with:
           bun-version: latest
 
-      - name: Install peer dependencies
-        run: bun add --dev @mariozechner/pi-coding-agent @sinclair/typebox
+      - name: Install dependencies
+        run: |
+          bun install
+          bun add --dev @mariozechner/pi-coding-agent @sinclair/typebox
 
       - name: Type check
         run: bun run tsc --noEmit
+
+      - name: Run tests
+        run: bun test
 
   publish:
     needs: lint
