@@ -18,6 +18,7 @@ describe("loadConfig", () => {
 	it("returns defaults when no config file exists", () => {
 		const config = loadConfig(dir);
 		expect(config.writable).toEqual([]);
+		expect(config.enabled).toBeUndefined();
 	});
 
 	it("loads writable paths from project config", () => {
@@ -30,12 +31,24 @@ describe("loadConfig", () => {
 		expect(config.writable).toEqual(["/tmp", "/var/data"]);
 	});
 
+	it("loads enabled field from project config", () => {
+		const piDir = join(dir, ".pi");
+		mkdirSync(piDir, { recursive: true });
+		writeFileSync(join(piDir, "pi-bash-readonly.json"), JSON.stringify({
+			writable: [],
+			enabled: false,
+		}));
+		const config = loadConfig(dir);
+		expect(config.enabled).toBe(false);
+	});
+
 	it("handles malformed JSON gracefully", () => {
 		const piDir = join(dir, ".pi");
 		mkdirSync(piDir, { recursive: true });
 		writeFileSync(join(piDir, "pi-bash-readonly.json"), "not json{{{");
 		const config = loadConfig(dir);
 		expect(config.writable).toEqual([]);
+		expect(config.enabled).toBeUndefined();
 	});
 
 	it("filters non-string entries from writable", () => {
@@ -56,5 +69,16 @@ describe("loadConfig", () => {
 		}));
 		const config = loadConfig(dir);
 		expect(config.writable).toEqual([]);
+	});
+
+	it("ignores non-boolean enabled values", () => {
+		const piDir = join(dir, ".pi");
+		mkdirSync(piDir, { recursive: true });
+		writeFileSync(join(piDir, "pi-bash-readonly.json"), JSON.stringify({
+			writable: [],
+			enabled: "yes",
+		}));
+		const config = loadConfig(dir);
+		expect(config.enabled).toBeUndefined();
 	});
 });

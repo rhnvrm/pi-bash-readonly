@@ -1,6 +1,6 @@
 {
   "name": "pi-bash-readonly",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Sandboxed read-only bash for Pi agents via bwrap",
   "type": "module",
   "license": "MIT",
@@ -24,6 +24,9 @@
     "extensions": [
       "./extensions/index.ts"
     ]
+  },
+  "dependencies": {
+    "gray-matter": "4.0.3"
   },
   "peerDependencies": {
     "@mariozechner/pi-coding-agent": "^0.62.0",

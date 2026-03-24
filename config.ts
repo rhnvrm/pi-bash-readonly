@@ -2,9 +2,10 @@
  * Pi Bash Readonly - Configuration
  *
  * Priority (highest to lowest):
- * 1. Project: .pi/pi-bash-readonly.json
- * 2. User: ~/.pi/agent/pi-bash-readonly.json
- * 3. Defaults
+ * 1. Agent frontmatter: bash-readonly / bash-readonly-locked
+ * 2. Project: .pi/pi-bash-readonly.json
+ * 3. User: ~/.pi/agent/pi-bash-readonly.json
+ * 4. Defaults
  */
 
 import { existsSync, readFileSync } from "node:fs";
@@ -14,6 +15,8 @@ import { dirname, join } from "node:path";
 export interface BashReadonlyConfig {
 	/** Paths that should be writable inside the sandbox. Default: [] */
 	writable: string[];
+	/** Initial sandbox state. Overridden by agent frontmatter. Default: true */
+	enabled?: boolean;
 }
 
 const DEFAULT_CONFIG: BashReadonlyConfig = {
@@ -63,5 +66,6 @@ export function loadConfig(cwd: string): BashReadonlyConfig {
 
 	return {
 		writable: Array.isArray(merged.writable) ? merged.writable.filter((p) => typeof p === "string") : [],
+		enabled: typeof merged.enabled === "boolean" ? merged.enabled : undefined,
 	};
 }

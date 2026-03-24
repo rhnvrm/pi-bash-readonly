@@ -14,30 +14,52 @@ Every `bash` tool call is wrapped in a bwrap sub-sandbox where the entire filesy
 
 This uses Linux mount namespaces. Unlike regex-based command filtering, writes are blocked at the filesystem level — from any language runtime (Python, Perl, dd, etc.).
 
+User bash commands (`!` and `!!` in the TUI) are also sandboxed when read-only mode is active.
+
 ## Configuration
+
+### Agent frontmatter (recommended)
+
+Set sandbox behavior per-agent in the agent's `.md` file:
+
+```yaml
+---
+name: scout
+bash-readonly: true
+bash-readonly-locked: true
+---
+```
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `bash-readonly` | — | Initial sandbox state. `true` = sandboxed, `false` = unrestricted. |
+| `bash-readonly-locked` | `false` | When `true`, disables the `/readonly` toggle command. |
+
+The extension reads the agent file using the `PI_AGENT` environment variable. It searches `.pi/agents/` and any paths configured in `.pi/agents.json` `agentPaths`.
+
+### Config file
 
 Configure via `.pi/pi-bash-readonly.json` (project) or `~/.pi/agent/pi-bash-readonly.json` (user). Project config takes priority.
 
 ```json
 {
-  "writable": ["/tmp"]
+  "writable": ["/tmp"],
+  "enabled": true
 }
 ```
 
 | Key | Default | Description |
 |-----|---------|-------------|
 | `writable` | `[]` | Paths to mount writable inside the sandbox. `/tmp` gets an isolated tmpfs (not the host /tmp). Other paths are bind-mounted read-write. |
+| `enabled` | `true` | Initial sandbox state. Overridden by agent frontmatter. |
 
-Without `"/tmp"` in `writable`, commands like `sort` on large inputs will fail since they need temp storage. Add it if your agents run commands that need scratch space.
+Without `"/tmp"` in `writable`, commands like `sort` on large inputs will fail since they need temp space. Add it if your agents run commands that need scratch space.
 
-## Behavior
+### Resolution order
 
-The extension adapts based on which tools the agent has:
-
-| Agent type | Behavior |
-|-----------|----------|
-| **Without edit/write** (e.g. scout, review) | bwrap is always on, no toggle. Read-only by design. |
-| **With edit/write** (e.g. coding agents) | `/readonly` command toggles bwrap on/off. Defaults to off. |
+1. Agent frontmatter `bash-readonly` field (if `PI_AGENT` is set and agent file found)
+2. Config file `enabled` field
+3. Default: `true` (sandboxed)
 
 ## Usage
 
@@ -48,19 +70,31 @@ extensions:
   - pi-bash-readonly
 ```
 
-Or use the `/readonly` command in an interactive session to toggle:
+Use the `/readonly` command in an interactive session to toggle:
 
 ```
 /readonly     # 🔒 bash: read-only (bwrap)
 /readonly     # 🔓 bash: full access
 ```
 
+If `bash-readonly-locked: true` is set in the agent's frontmatter, the toggle shows a "locked" notification and does nothing.
+
+## Visual indicator
+
+When the sandbox is active, bash tool calls display a 🔒 icon in the tool header:
+
+```
+🔒 bash ls -la
+```
+
+The status bar also shows `🔒 ro` when sandboxed.
+
 ## How it works
 
-1. Intercepts `tool_call` events for the bash tool
-2. Writes the original command to a temp file (avoids nested shell quoting issues)
-3. Replaces the command with a `bwrap` invocation that runs the temp file in a read-only sub-sandbox
-4. Cleans up the temp file after execution
+1. Registers a custom `bash` tool using `createBashTool` with a `spawnHook`
+2. The `spawnHook` wraps commands in bwrap via `bash -c` with shell escaping (no temp files)
+3. Intercepts `user_bash` events to sandbox `!` and `!!` commands too
+4. Reads agent frontmatter via `PI_AGENT` env var for per-agent configuration
 
 ## Requirements
 

@@ -1,34 +1,158 @@
 /**
  * pi-bash-readonly — Sandboxed read-only bash via bwrap.
  *
- * Intercepts bash tool calls and wraps commands in a bwrap sub-sandbox
- * where the entire filesystem is mounted read-only (`--ro-bind / /`).
+ * Uses `createBashTool` with `spawnHook` to wrap bash commands in a bwrap
+ * sub-sandbox where the entire filesystem is mounted read-only (`--ro-bind / /`).
  *
- * By default, nothing is writable — truly read-only. Configure writable
- * paths (e.g. /tmp for sort/awk) via .pi/pi-bash-readonly.json:
+ * Configuration priority:
+ * 1. Agent frontmatter: `bash-readonly: true/false`, `bash-readonly-locked: true/false`
+ * 2. Config file `enabled` field
+ * 3. Default: sandbox ON (true)
  *
- *   { "writable": ["/tmp"] }
- *
- * This is a hard security boundary using Linux mount namespaces.
- * Unlike regex-based command filtering, this catches writes from any
- * language runtime (python, perl, dd, etc.).
- *
- * Behavior depends on the agent's tool set:
- * - Agents WITHOUT edit/write tools:
- *   Always-on bwrap, no toggle. These agents are read-only by design.
- * - Agents WITH edit/write tools:
- *   `/readonly` command toggles bwrap wrapping on/off. Defaults to off.
+ * Features:
+ * - No temp files — commands are passed via `bash -c` with shell escaping
+ * - `user_bash` sandboxing — `!` and `!!` commands also go through bwrap
+ * - Visual indicator — 🔒 icon in bash tool header when sandboxed
+ * - Agent frontmatter-driven config via PI_AGENT env var + gray-matter
  */
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { isToolCallEventType } from "@mariozechner/pi-coding-agent";
-import { existsSync, writeFileSync } from "node:fs";
+import type { BashOperations, ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import { createBashTool, createLocalBashOperations } from "@mariozechner/pi-coding-agent";
+import { Text } from "@mariozechner/pi-tui";
+import { existsSync, readFileSync } from "node:fs";
 import { execSync } from "node:child_process";
+import { join, isAbsolute, dirname } from "node:path";
+import matter from "gray-matter";
 import { loadConfig } from "../config.js";
 
 /** Shell-escape a string by wrapping in single quotes. */
 function shellEscape(s: string): string {
 	return "'" + s.replace(/'/g, "'\\''") + "'";
+}
+
+/**
+ * Build a bwrap command that runs the given command in a read-only sandbox.
+ * No temp files — uses `bash -c` with proper shell escaping.
+ */
+function buildBwrapCommand(command: string, cwd: string, writablePaths: string[]): string {
+	const parts = [
+		"bwrap",
+		"--die-with-parent",
+		"--ro-bind / /",
+		"--dev /dev",
+		"--proc /proc",
+	];
+
+	for (const p of writablePaths) {
+		if (p === "/tmp") {
+			parts.push("--tmpfs /tmp");
+		} else {
+			parts.push(`--bind ${shellEscape(p)} ${shellEscape(p)}`);
+		}
+	}
+
+	parts.push(`--chdir ${shellEscape(cwd)}`);
+	parts.push(`bash -c ${shellEscape(command)}`);
+
+	return parts.join(" ");
+}
+
+/**
+ * Find the .pi directory by walking up from startDir.
+ */
+function findPiDir(startDir: string): string | null {
+	let dir = startDir;
+	while (true) {
+		const candidate = join(dir, ".pi");
+		if (existsSync(candidate)) return candidate;
+		const parent = dirname(dir);
+		if (parent === dir) return null;
+		dir = parent;
+	}
+}
+
+/**
+ * Load agentPaths from .pi/agents.json (same format as pi-agents config).
+ */
+function loadAgentPaths(cwd: string): string[] {
+	const piDir = findPiDir(cwd);
+	if (!piDir) return [];
+	const configPath = join(piDir, "agents.json");
+	if (!existsSync(configPath)) return [];
+	try {
+		const raw = JSON.parse(readFileSync(configPath, "utf-8"));
+		return Array.isArray(raw.agentPaths) ? raw.agentPaths : [];
+	} catch {
+		return [];
+	}
+}
+
+/**
+ * Find the file path for a named agent.
+ * Searches `.pi/agents/` first, then `agentPaths` in order.
+ */
+function findAgentFile(cwd: string, name: string): string | null {
+	const piDir = findPiDir(cwd);
+
+	// Standard path: .pi/agents/
+	if (piDir) {
+		const standardPath = join(piDir, "agents", `${name}.md`);
+		if (existsSync(standardPath)) return standardPath;
+	}
+
+	// Extra paths from config
+	const agentPaths = loadAgentPaths(cwd);
+	for (const p of agentPaths) {
+		const dir = isAbsolute(p) ? p : join(cwd, p);
+		const filePath = join(dir, `${name}.md`);
+		if (existsSync(filePath)) return filePath;
+	}
+
+	return null;
+}
+
+/**
+ * Determine initial sandbox state from agent frontmatter or config.
+ *
+ * Priority:
+ * 1. Agent frontmatter `bash-readonly` (if PI_AGENT is set and agent file found)
+ * 2. Config file `enabled` field
+ * 3. Default: true (sandboxed)
+ */
+function getInitialState(cwd: string, config: { enabled?: boolean }): { readOnly: boolean; locked: boolean } {
+	const agentName = process.env.PI_AGENT;
+	if (agentName && agentName !== "none") {
+		const agentFile = findAgentFile(cwd, agentName);
+		if (agentFile) {
+			try {
+				const { data } = matter(readFileSync(agentFile, "utf-8"));
+				if (typeof data["bash-readonly"] === "boolean") {
+					return {
+						readOnly: data["bash-readonly"],
+						locked: data["bash-readonly-locked"] === true,
+					};
+				}
+			} catch {
+				// Failed to parse agent file, fall through to config
+			}
+		}
+	}
+
+	// Fall back to config file
+	return { readOnly: config.enabled ?? true, locked: false };
+}
+
+/**
+ * Create BashOperations that wrap commands in bwrap.
+ */
+function createSandboxedBashOps(cwd: string, writablePaths: string[]): BashOperations {
+	const local = createLocalBashOperations();
+	return {
+		exec(command, execCwd, options) {
+			const wrapped = buildBwrapCommand(command, execCwd, writablePaths);
+			return local.exec(wrapped, cwd, options);
+		},
+	};
 }
 
 export default function (pi: ExtensionAPI) {
@@ -53,34 +177,57 @@ export default function (pi: ExtensionAPI) {
 		return true;
 	});
 
-	// Determines whether bwrap wrapping is active.
-	// For read-only agents (no edit/write): always true, no toggle.
-	// For write-capable agents: toggled via /readonly command, starts off.
-	let readOnly = true;
-	let isWriteCapableAgent = false;
+	// Determine initial state from agent frontmatter or config
+	const initialState = getInitialState(cwd, config);
+	let readOnly = hasBwrap ? initialState.readOnly : false;
+	const locked = initialState.locked;
 
-	pi.on("session_start", async () => {
-		const activeTools = pi.getActiveTools();
-		isWriteCapableAgent = activeTools.includes("edit") || activeTools.includes("write");
-
-		if (isWriteCapableAgent) {
-			// Write-capable agents start with readonly off — they opted into
-			// having edit/write and shouldn't be surprised by bwrap failures.
-			readOnly = false;
-		}
+	// Create both tool variants
+	const localBash = createBashTool(cwd);
+	const sandboxedBash = createBashTool(cwd, {
+		spawnHook: ({ command, cwd: spawnCwd, env }) => ({
+			command: buildBwrapCommand(command, spawnCwd, writablePaths),
+			cwd: spawnCwd,
+			env,
+		}),
 	});
 
-	// Only register /readonly for agents that have edit/write tools.
-	// Read-only agents (scout, review, etc.) get permanent bwrap with no escape.
+	// Register the bash tool with dynamic dispatch
+	pi.registerTool({
+		...localBash,
+
+		renderCall(args: { command: string; timeout?: number }, theme, context) {
+			const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
+			const lock = readOnly ? theme.fg("accent", "🔒 ") : "";
+			const content = `${lock}${theme.fg("toolTitle", theme.bold("bash "))}${theme.fg("muted", args.command ?? "")}`;
+			text.setText(content);
+			return text;
+		},
+
+		// renderResult omitted — inherits built-in bash renderer
+
+		async execute(id, params, signal, onUpdate, _ctx) {
+			const tool = readOnly ? sandboxedBash : localBash;
+			return tool.execute(id, params, signal, onUpdate);
+		},
+	});
+
+	// Sandbox user_bash (! and !! commands) when active
+	pi.on("user_bash", (_event) => {
+		if (!readOnly || !hasBwrap) return;
+		return { operations: createSandboxedBashOps(cwd, writablePaths) };
+	});
+
+	// Register /readonly toggle command
 	pi.registerCommand("readonly", {
 		description: "Toggle read-only bash (bwrap sandbox)",
 		handler: async (_args, ctx) => {
-			if (!isWriteCapableAgent) {
-				ctx.ui.notify("This agent is read-only by design — toggle not available", "warning");
-				return;
-			}
 			if (!hasBwrap) {
 				ctx.ui.notify("bwrap not found — read-only mode unavailable", "error");
+				return;
+			}
+			if (locked) {
+				ctx.ui.notify("🔒 bash read-only mode is locked by agent config", "warning");
 				return;
 			}
 			readOnly = !readOnly;
@@ -89,55 +236,10 @@ export default function (pi: ExtensionAPI) {
 		},
 	});
 
-	pi.on("tool_call", async (event) => {
-		if (!hasBwrap || !readOnly) return;
-		if (!isToolCallEventType("bash", event)) return;
-
-		const originalCommand = event.input.command;
-
-		// Write the original command to a temp file to avoid nested shell
-		// quoting issues across 4 layers (pi → bash -c → bwrap → bash).
-		const tmpFile = `/tmp/pi-bash-ro-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}.sh`;
-		writeFileSync(tmpFile, originalCommand, { mode: 0o700 });
-
-		// Build the bwrap command:
-		//   --die-with-parent     exit if parent pi process dies
-		//   --ro-bind / /         entire filesystem read-only (namespace-enforced)
-		//   --dev /dev            device nodes (needed for /dev/null, /dev/urandom, etc.)
-		//   --proc /proc          proc filesystem (needed for process info)
-		//   --ro-bind <tmpFile>   mount the command script read-only
-		//   --tmpfs/--bind        writable paths from config
-		//   --chdir <cwd>         preserve working directory
-		const parts = [
-			"bwrap",
-			"--die-with-parent",
-			"--ro-bind / /",
-			"--dev /dev",
-			"--proc /proc",
-		];
-
-		// Add configured writable paths before the script mount,
-		// so --tmpfs /tmp doesn't shadow the --ro-bind of our script file.
-		for (const p of writablePaths) {
-			if (p === "/tmp") {
-				// /tmp gets an isolated tmpfs — not the host /tmp
-				parts.push("--tmpfs /tmp");
-			} else {
-				parts.push(`--bind ${shellEscape(p)} ${shellEscape(p)}`);
-			}
+	// Set initial status indicator
+	pi.on("session_start", async (_event, ctx) => {
+		if (readOnly && hasBwrap) {
+			ctx.ui.setStatus("bash-ro", "🔒 ro");
 		}
-
-		// Mount the script file read-only. This must come AFTER --tmpfs /tmp
-		// so it overlays onto the tmpfs rather than being hidden by it.
-		parts.push(`--ro-bind ${tmpFile} ${tmpFile}`);
-
-		parts.push(`--chdir ${shellEscape(cwd)}`);
-		parts.push(`bash ${tmpFile}`);
-
-		const bwrapCmd = parts.join(" ");
-
-		// Run bwrap, capture exit code, clean up temp file regardless of outcome.
-		// The cleanup runs in the OUTER shell (after bwrap exits) where /tmp is writable.
-		event.input.command = `${bwrapCmd}; __exit=$?; rm -f ${tmpFile}; exit $__exit`;
 	});
 }

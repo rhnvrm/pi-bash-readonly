@@ -1,6 +1,6 @@
 import { describe, it, expect } from "bun:test";
 import { execSync } from "node:child_process";
-import { mkdtempSync, writeFileSync, existsSync } from "node:fs";
+import { mkdtempSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -12,10 +12,16 @@ try {
 	hasBwrap = false;
 }
 
-function bwrapExec(command: string, writablePaths: string[] = []): { stdout: string; exitCode: number } {
-	const tmpFile = join(tmpdir(), `pi-bash-ro-test-${Date.now()}-${Math.random().toString(36).slice(2)}.sh`);
-	writeFileSync(tmpFile, command, { mode: 0o700 });
+/** Shell-escape a string by wrapping in single quotes. */
+function shellEscape(s: string): string {
+	return "'" + s.replace(/'/g, "'\\''") + "'";
+}
 
+/**
+ * Build and execute a bwrap command using bash -c (no temp files).
+ * This mirrors the production buildBwrapCommand approach.
+ */
+function bwrapExec(command: string, writablePaths: string[] = []): { stdout: string; exitCode: number } {
 	const parts = [
 		"bwrap",
 		"--die-with-parent",
@@ -28,16 +34,14 @@ function bwrapExec(command: string, writablePaths: string[] = []): { stdout: str
 		if (p === "/tmp") {
 			parts.push("--tmpfs /tmp");
 		} else {
-			parts.push(`--bind '${p}' '${p}'`);
+			parts.push(`--bind ${shellEscape(p)} ${shellEscape(p)}`);
 		}
 	}
 
-	// Script mount must come after --tmpfs /tmp
-	parts.push(`--ro-bind ${tmpFile} ${tmpFile}`);
-	parts.push(`--chdir ${process.cwd()}`);
-	parts.push(`bash ${tmpFile}`);
+	parts.push(`--chdir ${shellEscape(process.cwd())}`);
+	parts.push(`bash -c ${shellEscape(command)}`);
 
-	const bwrapCmd = `${parts.join(" ")}; __exit=$?; rm -f ${tmpFile}; exit $__exit`;
+	const bwrapCmd = parts.join(" ");
 
 	try {
 		const stdout = execSync(bwrapCmd, { encoding: "utf-8", timeout: 5000 });
@@ -80,13 +84,6 @@ describe.skipIf(!hasBwrap)("bwrap sandbox", () => {
 		expect(result.stdout).toBe("hello");
 	});
 
-	it("script file is accessible when /tmp is writable", () => {
-		// This tests the mount ordering fix — --tmpfs /tmp before --ro-bind script
-		const result = bwrapExec("echo mount-order-ok", ["/tmp"]);
-		expect(result.exitCode).toBe(0);
-		expect(result.stdout).toBe("mount-order-ok");
-	});
-
 	it("allows writing only to configured writable paths", () => {
 		const writableDir = mkdtempSync(join(tmpdir(), "pi-bash-ro-writable-"));
 		const result = bwrapExec(
@@ -127,5 +124,23 @@ describe.skipIf(!hasBwrap)("bwrap sandbox", () => {
 	it("preserves exit code from command", () => {
 		const result = bwrapExec("exit 42");
 		expect(result.exitCode).toBe(42);
+	});
+
+	it("handles commands with single quotes", () => {
+		const result = bwrapExec("echo 'hello world'");
+		expect(result.exitCode).toBe(0);
+		expect(result.stdout).toBe("hello world");
+	});
+
+	it("handles commands with double quotes and variables", () => {
+		const result = bwrapExec('FOO=bar && echo "value is $FOO"');
+		expect(result.exitCode).toBe(0);
+		expect(result.stdout).toBe("value is bar");
+	});
+
+	it("handles multi-line commands", () => {
+		const result = bwrapExec("echo line1\necho line2");
+		expect(result.exitCode).toBe(0);
+		expect(result.stdout).toBe("line1\nline2");
 	});
 });
