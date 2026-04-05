@@ -71,6 +71,44 @@ describe("loadConfig", () => {
 		expect(config.writable).toEqual([]);
 	});
 
+	it("defaults network to false when not specified", () => {
+		const config = loadConfig(dir);
+		expect(config.network).toBe(false);
+	});
+
+	it("loads network: true from project config", () => {
+		const piDir = join(dir, ".pi");
+		mkdirSync(piDir, { recursive: true });
+		writeFileSync(join(piDir, "pi-bash-readonly.json"), JSON.stringify({
+			writable: [],
+			network: true,
+		}));
+		const config = loadConfig(dir);
+		expect(config.network).toBe(true);
+	});
+
+	it("loads network: false from project config", () => {
+		const piDir = join(dir, ".pi");
+		mkdirSync(piDir, { recursive: true });
+		writeFileSync(join(piDir, "pi-bash-readonly.json"), JSON.stringify({
+			writable: [],
+			network: false,
+		}));
+		const config = loadConfig(dir);
+		expect(config.network).toBe(false);
+	});
+
+	it("ignores non-boolean network values", () => {
+		const piDir = join(dir, ".pi");
+		mkdirSync(piDir, { recursive: true });
+		writeFileSync(join(piDir, "pi-bash-readonly.json"), JSON.stringify({
+			writable: [],
+			network: "yes",
+		}));
+		const config = loadConfig(dir);
+		expect(config.network).toBe(false);
+	});
+
 	it("ignores non-boolean enabled values", () => {
 		const piDir = join(dir, ".pi");
 		mkdirSync(piDir, { recursive: true });

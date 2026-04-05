@@ -28,11 +28,18 @@ If you configure writable paths other than `/tmp`, those are actual read-write b
 
 `/tmp` is the exception — it gets an isolated tmpfs that's destroyed when the command exits.
 
-## No network isolation
+## Network isolation caveats
 
-bwrap as configured here does not restrict network access. Commands inside the sandbox can still make network requests (curl, wget, etc.).
+By default, the sandbox uses `--unshare-net` to isolate network access. TCP/UDP connections (curl, wget, etc.) are blocked inside the sandbox.
 
-Network sandboxing would require `--unshare-net`, which breaks many legitimate commands. This is intentionally not done.
+To allow network access, set `"network": true` in `.pi/pi-bash-readonly.json`.
+
+However, `--unshare-net` only creates a new network namespace — it does **not** block all host communication:
+
+- **Unix domain sockets** on the mounted filesystem are still reachable if permissions allow (e.g. `docker.sock`-like surfaces).
+- **Other IPC channels** (shared memory, signals) are not affected by network namespace isolation.
+
+For most use cases (blocking HTTP requests, preventing data exfiltration over the network), `--unshare-net` is sufficient.
 
 ## Config is loaded once
 

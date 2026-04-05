@@ -17,6 +17,8 @@ export interface BashReadonlyConfig {
 	writable: string[];
 	/** Initial sandbox state. Overridden by agent frontmatter. Default: true */
 	enabled?: boolean;
+	/** Allow network access inside the sandbox. Default: false (network isolated) */
+	network?: boolean;
 }
 
 const DEFAULT_CONFIG: BashReadonlyConfig = {
@@ -67,5 +69,6 @@ export function loadConfig(cwd: string): BashReadonlyConfig {
 	return {
 		writable: Array.isArray(merged.writable) ? merged.writable.filter((p) => typeof p === "string") : [],
 		enabled: typeof merged.enabled === "boolean" ? merged.enabled : undefined,
+		network: typeof merged.network === "boolean" ? merged.network : false,
 	};
 }

@@ -34,7 +34,7 @@ function shellEscape(s: string): string {
  * Build a bwrap command that runs the given command in a read-only sandbox.
  * No temp files — uses `bash -c` with proper shell escaping.
  */
-function buildBwrapCommand(command: string, cwd: string, writablePaths: string[]): string {
+function buildBwrapCommand(command: string, cwd: string, writablePaths: string[], options?: { network?: boolean }): string {
 	const parts = [
 		"bwrap",
 		"--die-with-parent",
@@ -42,6 +42,11 @@ function buildBwrapCommand(command: string, cwd: string, writablePaths: string[]
 		"--dev /dev",
 		"--proc /proc",
 	];
+
+	// Network is isolated by default (--unshare-net)
+	if (!options?.network) {
+		parts.push("--unshare-net");
+	}
 
 	for (const p of writablePaths) {
 		if (p === "/tmp") {
@@ -145,11 +150,11 @@ function getInitialState(cwd: string, config: { enabled?: boolean }): { readOnly
 /**
  * Create BashOperations that wrap commands in bwrap.
  */
-function createSandboxedBashOps(cwd: string, writablePaths: string[]): BashOperations {
+function createSandboxedBashOps(cwd: string, writablePaths: string[], bwrapOptions?: { network?: boolean }): BashOperations {
 	const local = createLocalBashOperations();
 	return {
 		exec(command, execCwd, options) {
-			const wrapped = buildBwrapCommand(command, execCwd, writablePaths);
+			const wrapped = buildBwrapCommand(command, execCwd, writablePaths, bwrapOptions);
 			return local.exec(wrapped, cwd, options);
 		},
 	};
@@ -184,9 +189,10 @@ export default function (pi: ExtensionAPI) {
 
 	// Create both tool variants
 	const localBash = createBashTool(cwd);
+	const bwrapOptions = { network: config.network };
 	const sandboxedBash = createBashTool(cwd, {
 		spawnHook: ({ command, cwd: spawnCwd, env }) => ({
-			command: buildBwrapCommand(command, spawnCwd, writablePaths),
+			command: buildBwrapCommand(command, spawnCwd, writablePaths, bwrapOptions),
 			cwd: spawnCwd,
 			env,
 		}),
@@ -215,7 +221,7 @@ export default function (pi: ExtensionAPI) {
 	// Sandbox user_bash (! and !! commands) when active
 	pi.on("user_bash", (_event) => {
 		if (!readOnly || !hasBwrap) return;
-		return { operations: createSandboxedBashOps(cwd, writablePaths) };
+		return { operations: createSandboxedBashOps(cwd, writablePaths, bwrapOptions) };
 	});
 
 	// Register /readonly toggle command

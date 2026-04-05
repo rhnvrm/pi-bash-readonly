@@ -10,9 +10,11 @@ pi install npm:pi-bash-readonly
 
 ## What it does
 
-Every `bash` tool call is wrapped in a bwrap sub-sandbox where the entire filesystem is mounted read-only (`--ro-bind / /`). By default, **nothing is writable** — truly read-only.
+Every `bash` tool call is wrapped in a bwrap sub-sandbox where the entire filesystem is mounted read-only (`--ro-bind / /`). By default, **nothing is writable** and **network is isolated** via `--unshare-net`.
 
-This uses Linux mount namespaces. Unlike regex-based command filtering, writes are blocked at the filesystem level — from any language runtime (Python, Perl, dd, etc.).
+This uses Linux mount and network namespaces. Unlike regex-based command filtering, writes are blocked at the filesystem level and TCP/UDP network access is blocked via namespace isolation — from any language runtime (Python, Perl, dd, etc.).
+
+> **Note:** Network isolation blocks TCP/UDP but Unix domain sockets on the mounted filesystem may still be reachable. See [limitations](docs/01-guide/limitations.md) for details.
 
 User bash commands (`!` and `!!` in the TUI) are also sandboxed when read-only mode is active.
 
@@ -44,7 +46,8 @@ Configure via `.pi/pi-bash-readonly.json` (project) or `~/.pi/agent/pi-bash-read
 ```json
 {
   "writable": ["/tmp"],
-  "enabled": true
+  "enabled": true,
+  "network": false
 }
 ```
 
@@ -52,6 +55,7 @@ Configure via `.pi/pi-bash-readonly.json` (project) or `~/.pi/agent/pi-bash-read
 |-----|---------|-------------|
 | `writable` | `[]` | Paths to mount writable inside the sandbox. `/tmp` gets an isolated tmpfs (not the host /tmp). Other paths are bind-mounted read-write. |
 | `enabled` | `true` | Initial sandbox state. Overridden by agent frontmatter. |
+| `network` | `false` | Allow network access inside the sandbox. Default is `false` (network isolated via `--unshare-net`). Set to `true` if agents need to fetch packages, clone repos, or make HTTP requests. |
 
 Without `"/tmp"` in `writable`, commands like `sort` on large inputs will fail since they need temp space. Add it if your agents run commands that need scratch space.
 

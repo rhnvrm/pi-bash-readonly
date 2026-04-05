@@ -21,7 +21,7 @@ function shellEscape(s: string): string {
  * Build and execute a bwrap command using bash -c (no temp files).
  * This mirrors the production buildBwrapCommand approach.
  */
-function bwrapExec(command: string, writablePaths: string[] = []): { stdout: string; exitCode: number } {
+function bwrapExec(command: string, writablePaths: string[] = [], options?: { network?: boolean }): { stdout: string; exitCode: number } {
 	const parts = [
 		"bwrap",
 		"--die-with-parent",
@@ -29,6 +29,10 @@ function bwrapExec(command: string, writablePaths: string[] = []): { stdout: str
 		"--dev /dev",
 		"--proc /proc",
 	];
+
+	if (!options?.network) {
+		parts.push("--unshare-net");
+	}
 
 	for (const p of writablePaths) {
 		if (p === "/tmp") {
@@ -142,5 +146,32 @@ describe.skipIf(!hasBwrap)("bwrap sandbox", () => {
 		const result = bwrapExec("echo line1\necho line2");
 		expect(result.exitCode).toBe(0);
 		expect(result.stdout).toBe("line1\nline2");
+	});
+});
+
+describe.skipIf(!hasBwrap)("bwrap network isolation", () => {
+	it("blocks network access by default", () => {
+		// TCP connections should fail in the unshared network namespace
+		const result = bwrapExec("bash -c 'echo > /dev/tcp/1.1.1.1/80' 2>&1", [], { network: false });
+		expect(result.exitCode).not.toBe(0);
+	});
+
+	it("has only loopback when isolated vs host interfaces when not", () => {
+		// ip link works with /proc, no /sys needed
+		const isolated = bwrapExec("cat /proc/net/dev | tail -n +3 | awk -F: '{print $1}' | tr -d ' '", [], { network: false });
+		const shared = bwrapExec("cat /proc/net/dev | tail -n +3 | awk -F: '{print $1}' | tr -d ' '", [], { network: true });
+		expect(isolated.exitCode).toBe(0);
+		expect(shared.exitCode).toBe(0);
+		// Isolated namespace should have only lo; shared should have host interfaces too
+		const isolatedIfaces = isolated.stdout.trim().split("\n").filter(Boolean);
+		const sharedIfaces = shared.stdout.trim().split("\n").filter(Boolean);
+		expect(isolatedIfaces).toEqual(["lo"]);
+		expect(sharedIfaces.length).toBeGreaterThan(isolatedIfaces.length);
+	});
+
+	it("still allows reading files with network isolated", () => {
+		const result = bwrapExec("cat /proc/version", [], { network: false });
+		expect(result.exitCode).toBe(0);
+		expect(result.stdout).toContain("Linux");
 	});
 });
