@@ -1,6 +1,6 @@
 {
   "name": "pi-bash-readonly",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Sandboxed read-only bash for Pi agents via bwrap",
   "type": "module",
   "license": "MIT",
