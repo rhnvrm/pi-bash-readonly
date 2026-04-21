@@ -1,16 +1,18 @@
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
 import { loadConfig, mergeConfigLayers, normalizeConfigLayer } from "../config.js";
+import { createWritableTempDir, hasWritableTempBase } from "./temp-dir.js";
 
-describe("loadConfig", () => {
+const hasWritableTemp = hasWritableTempBase();
+
+describe.skipIf(!hasWritableTemp)("loadConfig", () => {
 	let dir: string;
 	let warnings: string[];
 	const originalWarn = console.warn;
 
 	beforeEach(() => {
-		dir = mkdtempSync(join(tmpdir(), "pi-bash-ro-config-"));
+		dir = createWritableTempDir("pi-bash-ro-config-");
 		warnings = [];
 		console.warn = (...args: unknown[]) => {
 			warnings.push(args.map(String).join(" "));
@@ -19,7 +21,9 @@ describe("loadConfig", () => {
 
 	afterEach(() => {
 		console.warn = originalWarn;
-		rmSync(dir, { recursive: true, force: true });
+		if (dir) {
+			rmSync(dir, { recursive: true, force: true });
+		}
 	});
 
 	it("returns normalized defaults when no config file exists", () => {

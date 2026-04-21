@@ -38,6 +38,9 @@ The preferred JSON format is structured:
   "sandbox": {
     "writable": ["/tmp"],
     "network": false
+  },
+  "sshPolicy": {
+    "mode": "require-remote-bwrap"
   }
 }
 ```
@@ -66,6 +69,28 @@ Current local execution mode:
 
 Keep this set to `local` unless the docs for a future release explicitly describe additional execution modes.
 
+#### `sshPolicy.mode`
+
+**Type**: `"off" | "require-remote-bwrap"`
+**Default**: `"require-remote-bwrap"`
+
+Controls how sandboxed local bash handles `ssh`.
+
+```json
+{
+  "sshPolicy": {
+    "mode": "require-remote-bwrap"
+  }
+}
+```
+
+- `require-remote-bwrap`: shadow `ssh` inside the sandbox with a shim that only allows `ssh ... <destination> <remote-command...>` style usage, forces ssh to run with a sterile config (`-F /dev/null` plus safe hardcoded options), probes the remote host for `bwrap`, and only then re-execs the real ssh client with a remote `bwrap ... bash -lc ...` wrapper.
+- `off`: disable the ssh shim entirely.
+
+This policy matters only for local sandboxed bash. It does not change agent frontmatter, and it does not yet enable configured remote bash mode by itself.
+
+Because the shim uses a sterile ssh config, normal `~/.ssh/config` host aliases and features such as `ProxyCommand` / `LocalCommand` are intentionally ignored in this mode. Pass connection details explicitly with supported flags instead.
+
 #### `sandbox.writable`
 
 **Type**: `string[]`  
@@ -87,6 +112,8 @@ Paths to mount writable inside the sandbox. By default nothing is writable.
 **Default**: `false`
 
 Allow network access inside the sandbox. By default network is isolated with `--unshare-net`.
+
+If you want sandboxed bash to reach remote hosts over `ssh`, this must be `true`. `sshPolicy.mode` controls how `ssh` behaves once network access is available.
 
 ```json
 {
@@ -131,6 +158,9 @@ Preferred:
   "sandbox": {
     "writable": ["/tmp"],
     "network": false
+  },
+  "sshPolicy": {
+    "mode": "require-remote-bwrap"
   }
 }
 ```
@@ -180,6 +210,9 @@ Result:
   "sandbox": {
     "writable": ["/var/data"],
     "network": true
+  },
+  "sshPolicy": {
+    "mode": "require-remote-bwrap"
   }
 }
 ```
@@ -208,3 +241,5 @@ If your agents only run simple commands (`ls`, `cat`, `grep`, `find`), you proba
 - Non-string entries in writable arrays are filtered out.
 - If `sandbox.writable` or legacy `writable` is not an array, it defaults to `[]`.
 - If `sandbox.network` or legacy `network` is not a boolean, it defaults to `false`.
+- If `sshPolicy.mode` is omitted or invalid, it defaults to `"require-remote-bwrap"`.
+- With `sshPolicy.mode: "require-remote-bwrap"`, sandboxed `ssh` is intentionally conservative: interactive `ssh host`, custom ssh config files, forwarding/tunnel options, and other unsupported modes are rejected.

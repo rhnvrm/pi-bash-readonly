@@ -18,6 +18,8 @@ This uses Linux mount and network namespaces. Unlike regex-based command filteri
 
 User bash commands (`!` and `!!` in the TUI) are also sandboxed when read-only mode is active.
 
+When sandboxed bash invokes `ssh`, the extension only allows `ssh ... <destination> <remote-command...>` style execution and requires the remote host to have `bwrap`. The shim runs ssh with a sterile config (`-F /dev/null` plus hardcoded safe options), so interactive `ssh host` usage, host aliases, `ProxyCommand`, and `LocalCommand` from normal ssh config are ignored in read-only mode. To let sandboxed bash reach remote hosts at all, set `sandbox.network: true`.
+
 ## Configuration
 
 ### Agent frontmatter (recommended)
@@ -52,6 +54,9 @@ Preferred structured format:
   "sandbox": {
     "writable": ["/tmp"],
     "network": false
+  },
+  "sshPolicy": {
+    "mode": "require-remote-bwrap"
   }
 }
 ```
@@ -74,8 +79,11 @@ Top-level `writable` and `network` are deprecated. The extension logs a warning 
 | `execution.type` | `"local"` | Current execution mode. Keep this set to `local` unless the docs for a future release explicitly describe additional modes. |
 | `sandbox.writable` | `[]` | Paths to mount writable inside the sandbox. `/tmp` gets an isolated tmpfs (not the host /tmp). Other paths are bind-mounted read-write. |
 | `sandbox.network` | `false` | Allow network access inside the sandbox. Default is `false` (network isolated via `--unshare-net`). Set to `true` if agents need to fetch packages, clone repos, or make HTTP requests. |
+| `sshPolicy.mode` | `"require-remote-bwrap"` | Policy for `ssh` invoked from sandboxed bash. `require-remote-bwrap` only allows `ssh ... <destination> <remote-command...>` style usage, forces ssh to run with a sterile config (`-F /dev/null` plus safe hardcoded options), and requires the remote host to have `bwrap`. Set `sandbox.network: true` if you want sandboxed ssh to reach remote hosts at all. Set to `"off"` to disable the ssh shim. |
 
 Without `"/tmp"` in `sandbox.writable`, commands like `sort` on large inputs will fail since they need temp space. Add it if your agents run commands that need scratch space.
+
+If you need remote shell syntax, be explicit: prefer `ssh host bash -lc '...'` over relying on interactive ssh or forwarding-heavy flows. Pass connection details explicitly with supported flags such as `-i`, `-p`, `-l`, or safe `-o` options, because the shim intentionally ignores normal ssh config files and aliases.
 
 ### Resolution order
 
@@ -126,7 +134,7 @@ The status bar also shows `🔒 ro` when sandboxed.
   - Debian/Ubuntu: `sudo apt install bubblewrap`
   - Fedora: `sudo dnf install bubblewrap`
   - Arch: `sudo pacman -S bubblewrap`
-- Falls back gracefully to unrestricted bash with a warning if bwrap is not found
+- If read-only mode is enabled and `bwrap` is not available, bash fails closed with an error instead of silently falling back to unrestricted execution
 
 ## License
 

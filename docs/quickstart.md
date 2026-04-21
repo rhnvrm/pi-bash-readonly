@@ -21,7 +21,7 @@ sudo dnf install bubblewrap
 sudo pacman -S bubblewrap
 ```
 
-If bwrap is not found, the extension logs a warning and falls back to unrestricted bash.
+If read-only mode is enabled and `bwrap` is not found, the extension logs a warning and fails closed instead of silently falling back to unrestricted bash.
 
 ## Add to an agent
 
@@ -65,8 +65,29 @@ If your agents need temp storage (for `sort`, `awk`, etc.), add `/tmp` as a writ
 ```json
 // .pi/pi-bash-readonly.json
 {
-  "writable": ["/tmp"]
+  "execution": { "type": "local" },
+  "sandbox": {
+    "writable": ["/tmp"]
+  }
 }
 ```
 
 The `/tmp` inside the sandbox is an isolated tmpfs — not the host `/tmp`. It's destroyed when each command exits.
+
+## Allow controlled ssh
+
+If you want sandboxed bash to reach remote hosts, enable network and keep the default ssh policy:
+
+```json
+// .pi/pi-bash-readonly.json
+{
+  "sandbox": {
+    "network": true
+  },
+  "sshPolicy": {
+    "mode": "require-remote-bwrap"
+  }
+}
+```
+
+With that policy, sandboxed `ssh` only allows `ssh ... <destination> <remote-command...>` style usage and refuses interactive sessions such as `ssh host`.

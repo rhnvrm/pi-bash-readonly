@@ -22,19 +22,61 @@ import { Text } from "@mariozechner/pi-tui";
 import { existsSync, readFileSync } from "node:fs";
 import { execSync } from "node:child_process";
 import { join, isAbsolute, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import matter from "gray-matter";
+import type { BashReadonlySshPolicyMode } from "../config.js";
 import { loadConfig } from "../config.js";
+
+const MISSING_BWRAP_MESSAGE = "bwrap not found — read-only mode requested but unavailable";
+
+interface SshShimConfig {
+	mode: BashReadonlySshPolicyMode;
+	realSshPath: string;
+	shimPath: string;
+	sandboxRealSshPath: string;
+}
 
 /** Shell-escape a string by wrapping in single quotes. */
 function shellEscape(s: string): string {
 	return "'" + s.replace(/'/g, "'\\''") + "'";
 }
 
+function resolveSshShimConfig(mode: BashReadonlySshPolicyMode): SshShimConfig | undefined {
+	if (mode === "off") return undefined;
+	const shimPath = fileURLToPath(new URL("./ssh-shim.js", import.meta.url));
+	if (!existsSync(shimPath)) {
+		console.warn("[pi-bash-readonly] ssh-shim.js not found — ssh policy unavailable");
+		return undefined;
+	}
+	try {
+		const realSshPath = execSync("command -v ssh", { encoding: "utf-8" }).trim();
+		if (!realSshPath) {
+			console.warn("[pi-bash-readonly] ssh not found — ssh policy unavailable");
+			return undefined;
+		}
+		return {
+			mode,
+			realSshPath,
+			shimPath,
+			sandboxRealSshPath: "/run/pi-bash-readonly/real-ssh",
+		};
+	} catch {
+		console.warn("[pi-bash-readonly] ssh not found — ssh policy unavailable");
+		return undefined;
+	}
+}
+
 /**
  * Build a bwrap command that runs the given command in a read-only sandbox.
  * No temp files — uses `bash -c` with proper shell escaping.
  */
-function buildBwrapCommand(command: string, cwd: string, writablePaths: string[], options?: { network?: boolean }): string {
+export function buildBwrapCommand(
+	command: string,
+	cwd: string,
+	writablePaths: string[],
+	options?: { network?: boolean },
+	sshShimConfig?: SshShimConfig,
+): string {
 	const parts = [
 		"bwrap",
 		"--die-with-parent",
@@ -54,6 +96,16 @@ function buildBwrapCommand(command: string, cwd: string, writablePaths: string[]
 		} else {
 			parts.push(`--bind ${shellEscape(p)} ${shellEscape(p)}`);
 		}
+	}
+
+	if (sshShimConfig) {
+		parts.push("--dir /run/pi-bash-readonly");
+		parts.push(`--ro-bind ${shellEscape(sshShimConfig.realSshPath)} ${shellEscape(sshShimConfig.sandboxRealSshPath)}`);
+		parts.push(`--ro-bind ${shellEscape(sshShimConfig.shimPath)} ${shellEscape(sshShimConfig.realSshPath)}`);
+		parts.push(`--setenv PI_BASH_RO_REAL_SSH ${shellEscape(sshShimConfig.sandboxRealSshPath)}`);
+		parts.push(`--setenv PI_BASH_RO_SSH_POLICY ${shellEscape(sshShimConfig.mode)}`);
+		parts.push(`--setenv PI_BASH_RO_WRITABLE_PATHS ${shellEscape(JSON.stringify(writablePaths))}`);
+		parts.push(`--setenv PI_BASH_RO_NETWORK ${shellEscape(options?.network ? "1" : "0")}`);
 	}
 
 	parts.push(`--chdir ${shellEscape(cwd)}`);
@@ -147,14 +199,27 @@ function getInitialState(cwd: string, config: { enabled?: boolean }): { readOnly
 	return { readOnly: config.enabled ?? true, locked: false };
 }
 
+function createUnavailableBashOps(message: string): BashOperations {
+	return {
+		exec: async () => {
+			throw new Error(message);
+		},
+	};
+}
+
 /**
  * Create BashOperations that wrap commands in bwrap.
  */
-function createSandboxedBashOps(cwd: string, writablePaths: string[], bwrapOptions?: { network?: boolean }): BashOperations {
+function createSandboxedBashOps(
+	cwd: string,
+	writablePaths: string[],
+	bwrapOptions?: { network?: boolean },
+	sshShimConfig?: SshShimConfig,
+): BashOperations {
 	const local = createLocalBashOperations();
 	return {
 		exec(command, execCwd, options) {
-			const wrapped = buildBwrapCommand(command, execCwd, writablePaths, bwrapOptions);
+			const wrapped = buildBwrapCommand(command, execCwd, writablePaths, bwrapOptions, sshShimConfig);
 			return local.exec(wrapped, cwd, options);
 		},
 	};
@@ -170,7 +235,7 @@ export default function (pi: ExtensionAPI) {
 		execSync("which bwrap", { stdio: "ignore" });
 	} catch {
 		hasBwrap = false;
-		console.warn("[pi-bash-readonly] bwrap not found — falling back to unrestricted bash");
+		console.warn("[pi-bash-readonly] bwrap not found — read-only mode will fail closed when enabled");
 	}
 
 	if (config.execution.type !== "local") {
@@ -186,9 +251,14 @@ export default function (pi: ExtensionAPI) {
 		return true;
 	});
 
+	const sshShimConfig = resolveSshShimConfig(config.sshPolicy.mode);
+	const sshPolicyUnavailable = config.sandbox.network && config.sshPolicy.mode !== "off" && !sshShimConfig
+		? "ssh policy requires a working ssh shim when sandbox.network=true"
+		: undefined;
+
 	// Determine initial state from agent frontmatter or config
 	const initialState = getInitialState(cwd, config);
-	let readOnly = hasBwrap ? initialState.readOnly : false;
+	let readOnly = initialState.readOnly;
 	const locked = initialState.locked;
 
 	// Create both tool variants
@@ -196,7 +266,7 @@ export default function (pi: ExtensionAPI) {
 	const bwrapOptions = { network: config.sandbox.network };
 	const sandboxedBash = createBashTool(cwd, {
 		spawnHook: ({ command, cwd: spawnCwd, env }) => ({
-			command: buildBwrapCommand(command, spawnCwd, writablePaths, bwrapOptions),
+			command: buildBwrapCommand(command, spawnCwd, writablePaths, bwrapOptions, sshShimConfig),
 			cwd: spawnCwd,
 			env,
 		}),
@@ -217,6 +287,12 @@ export default function (pi: ExtensionAPI) {
 		// renderResult omitted — inherits built-in bash renderer
 
 		async execute(id, params, signal, onUpdate, _ctx) {
+			if (readOnly && !hasBwrap) {
+				throw new Error(MISSING_BWRAP_MESSAGE);
+			}
+			if (readOnly && sshPolicyUnavailable) {
+				throw new Error(`[pi-bash-readonly] ${sshPolicyUnavailable}`);
+			}
 			const tool = readOnly ? sandboxedBash : localBash;
 			return tool.execute(id, params, signal, onUpdate);
 		},
@@ -224,8 +300,14 @@ export default function (pi: ExtensionAPI) {
 
 	// Sandbox user_bash (! and !! commands) when active
 	pi.on("user_bash", (_event) => {
-		if (!readOnly || !hasBwrap) return;
-		return { operations: createSandboxedBashOps(cwd, writablePaths, bwrapOptions) };
+		if (!readOnly) return;
+		if (!hasBwrap) {
+			return { operations: createUnavailableBashOps(MISSING_BWRAP_MESSAGE) };
+		}
+		if (sshPolicyUnavailable) {
+			return { operations: createUnavailableBashOps(`[pi-bash-readonly] ${sshPolicyUnavailable}`) };
+		}
+		return { operations: createSandboxedBashOps(cwd, writablePaths, bwrapOptions, sshShimConfig) };
 	});
 
 	// Register /readonly toggle command
@@ -250,6 +332,12 @@ export default function (pi: ExtensionAPI) {
 	pi.on("session_start", async (_event, ctx) => {
 		if (readOnly && hasBwrap) {
 			ctx.ui.setStatus("bash-ro", "🔒 ro");
+		}
+		if (readOnly && !hasBwrap) {
+			ctx.ui.notify(MISSING_BWRAP_MESSAGE, "error");
+		}
+		if (readOnly && sshPolicyUnavailable) {
+			ctx.ui.notify(`[pi-bash-readonly] ${sshPolicyUnavailable}`, "error");
 		}
 	});
 }

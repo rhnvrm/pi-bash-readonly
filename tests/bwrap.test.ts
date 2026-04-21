@@ -1,8 +1,7 @@
 import { describe, it, expect } from "bun:test";
 import { execSync } from "node:child_process";
-import { mkdtempSync, existsSync } from "node:fs";
-import { join } from "node:path";
-import { tmpdir } from "node:os";
+import { existsSync } from "node:fs";
+import { createWritableTempDir, hasWritableTempBase } from "./temp-dir.js";
 
 // Skip all tests if bwrap is not available
 let hasBwrap = true;
@@ -55,6 +54,8 @@ function bwrapExec(command: string, writablePaths: string[] = [], options?: { ne
 	}
 }
 
+const hasWritableTemp = hasWritableTempBase();
+
 describe.skipIf(!hasBwrap)("bwrap sandbox", () => {
 	it("allows reading files", () => {
 		const result = bwrapExec("cat /proc/version");
@@ -63,7 +64,7 @@ describe.skipIf(!hasBwrap)("bwrap sandbox", () => {
 	});
 
 	it("blocks writing to filesystem", () => {
-		const target = join(tmpdir(), `pi-bash-ro-write-test-${Date.now()}`);
+		const target = `/tmp/pi-bash-ro-write-test-${Date.now()}`;
 		const result = bwrapExec(`echo "should fail" > ${target}`);
 		expect(result.exitCode).not.toBe(0);
 		expect(existsSync(target)).toBe(false);
@@ -88,8 +89,8 @@ describe.skipIf(!hasBwrap)("bwrap sandbox", () => {
 		expect(result.stdout).toBe("hello");
 	});
 
-	it("allows writing only to configured writable paths", () => {
-		const writableDir = mkdtempSync(join(tmpdir(), "pi-bash-ro-writable-"));
+	it.skipIf(!hasWritableTemp)("allows writing only to configured writable paths", () => {
+		const writableDir = createWritableTempDir("pi-bash-ro-writable-");
 		const result = bwrapExec(
 			`echo "allowed" > ${writableDir}/test.txt && cat ${writableDir}/test.txt`,
 			[writableDir],
@@ -98,8 +99,8 @@ describe.skipIf(!hasBwrap)("bwrap sandbox", () => {
 		expect(result.stdout).toBe("allowed");
 	});
 
-	it("still blocks writes outside configured writable paths", () => {
-		const writableDir = mkdtempSync(join(tmpdir(), "pi-bash-ro-writable-"));
+	it.skipIf(!hasWritableTemp)("still blocks writes outside configured writable paths", () => {
+		const writableDir = createWritableTempDir("pi-bash-ro-writable-");
 		const result = bwrapExec(
 			`echo "should fail" > /home/pi-bash-ro-test 2>&1`,
 			[writableDir],
