@@ -108,3 +108,19 @@ If you want the `bash` tool itself to run on a known remote host:
 ```
 
 In this mode, `bash` runs remotely over SSH, but file tools still operate locally. Readonly mode still applies: when it is on, the extension probes the remote host for `bwrap` and refuses execution if the remote host does not provide it.
+
+## Validate the SSH flows locally
+
+This repo includes a Docker-based SSH validation harness:
+
+```bash
+bun run test:ssh-docker
+```
+
+It starts two disposable sshd targets and exercises:
+
+- local sandboxed `ssh` against a host with `bwrap`
+- local sandboxed `ssh` against a host without `bwrap`
+- configured remote bash in readonly mode against both targets
+
+The `with-bwrap` target uses a small test stub for `bwrap`, so this harness validates SSH policy and execution-path behavior rather than full nested remote namespace isolation.

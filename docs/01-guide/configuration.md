@@ -140,6 +140,18 @@ If you want sandboxed bash to reach remote hosts over `ssh`, this must be `true`
 }
 ```
 
+## Why the defaults are strict
+
+The defaults are intentionally conservative:
+
+- `enabled: true` — safer to start sandboxed and loosen intentionally than to assume unrestricted bash is acceptable.
+- `execution.type: "local"` — avoids surprising split-brain remote behavior unless you opt in.
+- `sandbox.writable: []` — nothing is writable unless you explicitly grant it.
+- `sandbox.network: false` — network access is off unless you decide the agent needs it.
+- `sshPolicy.mode: "require-remote-bwrap"` — if sandboxed local bash uses `ssh`, the remote side must confirm a read-only wrapper first.
+
+That combination makes the extension fail closed by default instead of quietly expanding privileges.
+
 ## Legacy JSON format
 
 The old flat format is still supported:

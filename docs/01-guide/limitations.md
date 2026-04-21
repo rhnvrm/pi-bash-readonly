@@ -73,6 +73,19 @@ That means:
 
 Do not treat this as a full remote workspace abstraction.
 
+## Docker validation uses a stub remote bwrap
+
+The repo's Docker-based SSH harness validates the policy path and remote execution wiring, but the `with-bwrap` target uses a small `bwrap` stub instead of a fully privileged nested bubblewrap sandbox.
+
+That means the harness is good for catching regressions in:
+
+- SSH argument validation
+- remote `bwrap` probing
+- fail-closed behavior
+- configured remote bash dispatch
+
+It does **not** prove full remote namespace isolation inside Docker.
+
 ## Config is loaded once
 
 Configuration and writable paths are resolved when the extension loads. Changing `.pi/pi-bash-readonly.json` mid-session requires restarting Pi.

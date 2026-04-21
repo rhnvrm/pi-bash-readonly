@@ -20,6 +20,14 @@ User bash commands (`!` and `!!` in the TUI) are also sandboxed when read-only m
 
 When sandboxed bash invokes `ssh`, the extension only allows `ssh ... <destination> <remote-command...>` style execution and requires the remote host to have `bwrap`. The shim runs ssh with a sterile config (`-F /dev/null` plus hardcoded safe options), so interactive `ssh host` usage, host aliases, `ProxyCommand`, and `LocalCommand` from normal ssh config are ignored in read-only mode. To let sandboxed bash reach remote hosts at all, set `sandbox.network: true`.
 
+## Common setups
+
+This extension supports three distinct modes:
+
+1. **Plain local read-only bash** — `execution.type: "local"` with readonly on. Bash runs locally inside `bwrap`.
+2. **Local bash with controlled SSH** — still `execution.type: "local"`, but sandboxed bash may call `ssh` through the policy shim when `sandbox.network: true`.
+3. **Configured remote bash** — `execution.type: "ssh"`. The `bash` tool itself runs on a configured remote host over SSH, while file tools remain local.
+
 ## Configuration
 
 ### Agent frontmatter (recommended)
@@ -149,6 +157,21 @@ The status bar also shows `🔒 ro` when sandboxed.
 3. In configured remote mode, swaps in SSH-backed bash operations and optionally wraps remote commands in remote `bwrap`
 4. Intercepts `user_bash` events so `!` and `!!` follow the same local-vs-remote execution path
 5. Reads agent frontmatter plus structured/legacy JSON config for per-agent configuration
+
+## Validation
+
+For the SSH integration path, the repo includes a minimal Docker-based harness:
+
+```bash
+bun run test:ssh-docker
+```
+
+That command starts two disposable sshd containers:
+
+- `with-bwrap` — exposes a test `bwrap` stub so the SSH policy and remote wrapping path can be exercised
+- `without-bwrap` — intentionally lacks `bwrap`
+
+This validates the SSH policy and configured-remote dispatch behavior end to end. It does **not** prove full nested remote namespace isolation inside Docker; the `with-bwrap` target uses a small stub instead of a privileged real `bwrap` sandbox.
 
 ## Requirements
 
