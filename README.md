@@ -76,14 +76,35 @@ Top-level `writable` and `network` are deprecated. The extension logs a warning 
 | Key | Default | Description |
 |-----|---------|-------------|
 | `enabled` | `true` | Initial sandbox state. Overridden by agent frontmatter. |
-| `execution.type` | `"local"` | Current execution mode. Keep this set to `local` unless the docs for a future release explicitly describe additional modes. |
+| `execution.type` | `"local"` | Execution mode for the bash tool. Use `"local"` for normal local bash, or `"ssh"` to run bash on a configured remote host over SSH. |
 | `sandbox.writable` | `[]` | Paths to mount writable inside the sandbox. `/tmp` gets an isolated tmpfs (not the host /tmp). Other paths are bind-mounted read-write. |
 | `sandbox.network` | `false` | Allow network access inside the sandbox. Default is `false` (network isolated via `--unshare-net`). Set to `true` if agents need to fetch packages, clone repos, or make HTTP requests. |
 | `sshPolicy.mode` | `"require-remote-bwrap"` | Policy for `ssh` invoked from sandboxed bash. `require-remote-bwrap` only allows `ssh ... <destination> <remote-command...>` style usage, forces ssh to run with a sterile config (`-F /dev/null` plus safe hardcoded options), and requires the remote host to have `bwrap`. Set `sandbox.network: true` if you want sandboxed ssh to reach remote hosts at all. Set to `"off"` to disable the ssh shim. |
 
 Without `"/tmp"` in `sandbox.writable`, commands like `sort` on large inputs will fail since they need temp space. Add it if your agents run commands that need scratch space.
 
-If you need remote shell syntax, be explicit: prefer `ssh host bash -lc '...'` over relying on interactive ssh or forwarding-heavy flows. Pass connection details explicitly with supported flags such as `-i`, `-p`, `-l`, or safe `-o` options, because the shim intentionally ignores normal ssh config files and aliases.
+Remote bash mode example:
+
+```json
+{
+  "execution": {
+    "type": "ssh",
+    "host": "user@example.com",
+    "cwd": "/srv/project",
+    "args": ["-p", "2222"]
+  },
+  "sandbox": {
+    "writable": ["/tmp"],
+    "network": false
+  }
+}
+```
+
+In that mode, the `bash` tool runs on the configured remote host. File tools such as `read`, `grep`, `find`, `ls`, `edit`, and `write` remain local. This is intentionally a split-brain setup, not a full remote workspace abstraction.
+
+`execution.host` must be a literal SSH destination such as `user@example.com`. It must not be empty, contain whitespace, or start with `-`.
+
+If you need remote shell syntax in local execution mode, be explicit: prefer `ssh host bash -lc '...'` over relying on interactive ssh or forwarding-heavy flows. Pass connection details explicitly with supported flags such as `-i`, `-p`, `-l`, or safe `-o` options, because the shim intentionally ignores normal ssh config files and aliases.
 
 ### Resolution order
 
@@ -123,10 +144,11 @@ The status bar also shows `🔒 ro` when sandboxed.
 
 ## How it works
 
-1. Registers a custom `bash` tool using `createBashTool` with a `spawnHook`
-2. The `spawnHook` wraps commands in bwrap via `bash -c` with shell escaping (no temp files)
-3. Intercepts `user_bash` events to sandbox `!` and `!!` commands too
-4. Reads agent frontmatter plus structured/legacy JSON config for per-agent configuration
+1. Registers a custom `bash` tool using `createBashTool`
+2. In local mode, uses a `spawnHook` to wrap commands in bwrap via `bash -c` with shell escaping
+3. In configured remote mode, swaps in SSH-backed bash operations and optionally wraps remote commands in remote `bwrap`
+4. Intercepts `user_bash` events so `!` and `!!` follow the same local-vs-remote execution path
+5. Reads agent frontmatter plus structured/legacy JSON config for per-agent configuration
 
 ## Requirements
 
@@ -134,6 +156,7 @@ The status bar also shows `🔒 ro` when sandboxed.
   - Debian/Ubuntu: `sudo apt install bubblewrap`
   - Fedora: `sudo dnf install bubblewrap`
   - Arch: `sudo pacman -S bubblewrap`
+- `ssh` in `PATH` if you use either controlled local SSH or configured remote bash mode
 - If read-only mode is enabled and `bwrap` is not available, bash fails closed with an error instead of silently falling back to unrestricted execution
 
 ## License

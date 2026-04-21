@@ -86,14 +86,31 @@ The shim then:
 
 This is how local sandboxed bash can require a remote read-only sandbox before allowing remote execution.
 
+## Configured remote bash mode
+
+When `execution.type` is `"ssh"`, the extension does not use local `bwrap` for command execution.
+
+Instead, it swaps the bash backend to SSH-backed operations:
+
+1. Build a sterile SSH argv (`-F /dev/null` plus safe hardcoded options).
+2. Add any validated `execution.args` from config.
+3. Resolve the remote working directory from `execution.cwd` or remote `pwd`.
+4. Map the local bash cwd onto that remote root.
+5. Execute the command remotely.
+6. If readonly mode is on, require remote `bwrap` first and wrap the remote command inside it.
+
+That means readonly vs unrestricted still works in remote mode — it just happens on the configured remote host instead of locally.
+
 ## User bash (`!` / `!!`)
 
 Pi's interactive user bash commands are handled through the `user_bash` event.
 
-When read-only mode is active, the extension returns sandboxed bash operations there too. That keeps `!` and `!!` aligned with normal bash tool calls.
+The extension returns operations there too, so `!` and `!!` follow the same execution mode as normal bash tool calls: local vs remote, readonly vs unrestricted.
 
 ## Fail-closed behavior
 
-If read-only mode is enabled but local `bwrap` is unavailable, the extension does not silently fall back to unrestricted execution.
+If read-only mode is enabled but local `bwrap` is unavailable in local execution mode, the extension does not silently fall back to unrestricted execution.
 
 Instead, bash execution fails closed with an error so the agent cannot escape the intended policy by accident.
+
+In configured remote mode, the analogous fail-closed check is remote `bwrap`: readonly remote bash probes for it first and refuses execution if the remote host does not provide it.

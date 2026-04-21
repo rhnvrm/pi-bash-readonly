@@ -67,8 +67,9 @@ Frontmatter only controls:
 - the initial read-only state
 - whether toggling is locked
 
-JSON config still controls sandbox details such as:
+JSON config still controls execution details such as:
 
+- local vs configured remote bash execution
 - writable paths
 - network access
 - ssh policy

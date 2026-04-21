@@ -91,3 +91,20 @@ If you want sandboxed bash to reach remote hosts, enable network and keep the de
 ```
 
 With that policy, sandboxed `ssh` only allows `ssh ... <destination> <remote-command...>` style usage and refuses interactive sessions such as `ssh host`.
+
+## Use configured remote bash
+
+If you want the `bash` tool itself to run on a known remote host:
+
+```json
+// .pi/pi-bash-readonly.json
+{
+  "execution": {
+    "type": "ssh",
+    "host": "user@example.com",
+    "cwd": "/srv/project"
+  }
+}
+```
+
+In this mode, `bash` runs remotely over SSH, but file tools still operate locally. Readonly mode still applies: when it is on, the extension probes the remote host for `bwrap` and refuses execution if the remote host does not provide it.

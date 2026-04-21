@@ -59,7 +59,9 @@ Initial sandbox state. Agent frontmatter `bash-readonly` overrides this when pre
 **Type**: object
 **Default**: `{ "type": "local" }`
 
-Current local execution mode:
+Execution mode for the `bash` tool.
+
+Local mode:
 
 ```json
 {
@@ -67,7 +69,22 @@ Current local execution mode:
 }
 ```
 
-Keep this set to `local` unless the docs for a future release explicitly describe additional execution modes.
+Configured remote mode:
+
+```json
+{
+  "execution": {
+    "type": "ssh",
+    "host": "user@example.com",
+    "cwd": "/srv/project",
+    "args": ["-p", "2222"]
+  }
+}
+```
+
+In `"ssh"` mode, the `bash` tool runs on the configured remote host. File tools remain local. This is intentionally a split-brain setup, not a full remote workspace abstraction.
+
+`execution.host` must be a literal SSH destination such as `user@example.com` or `build-host`. It must not be empty, contain whitespace, or start with `-`.
 
 #### `sshPolicy.mode`
 
@@ -87,7 +104,7 @@ Controls how sandboxed local bash handles `ssh`.
 - `require-remote-bwrap`: shadow `ssh` inside the sandbox with a shim that only allows `ssh ... <destination> <remote-command...>` style usage, forces ssh to run with a sterile config (`-F /dev/null` plus safe hardcoded options), probes the remote host for `bwrap`, and only then re-execs the real ssh client with a remote `bwrap ... bash -lc ...` wrapper.
 - `off`: disable the ssh shim entirely.
 
-This policy matters only for local sandboxed bash. It does not change agent frontmatter, and it does not yet enable configured remote bash mode by itself.
+This policy matters only for local sandboxed bash. It does not change agent frontmatter.
 
 Because the shim uses a sterile ssh config, normal `~/.ssh/config` host aliases and features such as `ProxyCommand` / `LocalCommand` are intentionally ignored in this mode. Pass connection details explicitly with supported flags instead.
 
@@ -216,6 +233,16 @@ Result:
   }
 }
 ```
+
+## Remote execution notes
+
+When `execution.type` is `"ssh"`:
+
+- `execution.host` is the SSH destination. It must be a literal destination value, not an option-like string.
+- `execution.cwd` is the remote root directory for bash commands. If omitted, the extension resolves it with remote `pwd` on first use.
+- `execution.args` is a small safe subset of SSH option flags such as `-i`, `-p`, `-l`, and selected safe `-o` options.
+- Readonly mode still matters: when readonly is on, remote bash requires remote `bwrap`; when readonly is off, commands run remotely without the `bwrap` wrapper.
+- File tools remain local even though bash runs remotely.
 
 ## How writable paths are mounted
 

@@ -61,6 +61,18 @@ If read-only mode is enabled with `sandbox.network: true` and `sshPolicy.mode: "
 
 That is intentionally conservative: it may block non-ssh commands in a misconfigured session, but it avoids a silent policy bypass.
 
+## Remote bash is split-brain by design
+
+When `execution.type` is `"ssh"`, only the `bash` tool moves to the remote host.
+
+That means:
+
+- `bash` runs remotely
+- `read`, `grep`, `find`, `ls`, `edit`, and `write` still operate on local files
+- local and remote working directories may correspond to mirrored repos, but the extension does not enforce that for you
+
+Do not treat this as a full remote workspace abstraction.
+
 ## Config is loaded once
 
 Configuration and writable paths are resolved when the extension loads. Changing `.pi/pi-bash-readonly.json` mid-session requires restarting Pi.
