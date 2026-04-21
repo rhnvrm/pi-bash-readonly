@@ -1,0 +1,18 @@
+services:
+  with-bwrap:
+    build:
+      context: ./ssh-compose
+      dockerfile: Dockerfile
+    environment:
+      WITH_BWRAP: "1"
+    ports:
+      - "127.0.0.1:${PI_BASH_RO_SSH_PORT_WITH_BWRAP:-22221}:22"
+
+  without-bwrap:
+    build:
+      context: ./ssh-compose
+      dockerfile: Dockerfile
+    environment:
+      WITH_BWRAP: "0"
+    ports:
+      - "127.0.0.1:${PI_BASH_RO_SSH_PORT_WITHOUT_BWRAP:-22222}:22"

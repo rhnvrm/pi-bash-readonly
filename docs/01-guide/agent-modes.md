@@ -1,29 +1,77 @@
 # Agent modes
 
-The extension behaves differently depending on what tools the agent has.
+The extension does not infer agent mode from the tool list. It follows agent frontmatter plus JSON config.
 
-## Read-only agents
+## Frontmatter-controlled startup mode
 
-Agents **without** `edit` or `write` tools (e.g. scout, review, oracle):
+Use agent frontmatter to choose the initial state for a specific agent:
 
-- bwrap is **always on** — every bash call is sandboxed
-- No `/readonly` toggle — these agents are read-only by design
-- If the user runs `/readonly`, they see: "This agent is read-only by design — toggle not available"
+```yaml
+---
+name: scout
+bash-readonly: true
+bash-readonly-locked: true
+---
+```
 
-This is the primary use case. You define a read-only agent and `pi-bash-readonly` ensures bash can't write anything.
+- `bash-readonly: true` starts the session with sandboxed bash enabled.
+- `bash-readonly: false` starts the session with unrestricted bash.
+- `bash-readonly-locked: true` disables the `/readonly` toggle.
 
-## Write-capable agents
+If frontmatter does not specify `bash-readonly`, the extension falls back to JSON config and then to the default of `enabled: true`.
 
-Agents **with** `edit` or `write` tools (e.g. bosun, lite, deckhand):
+## Locked read-only agents
 
-- bwrap is **off by default** — bash runs normally
-- `/readonly` command toggles bwrap on/off
-- Status bar shows `🔒 ro` when active
+This is the usual setup for review/scout-style agents:
 
-This lets you temporarily lock down bash for a write-capable agent. For example, during a review phase where the agent should only read.
+```yaml
+---
+name: scout
+bash-readonly: true
+bash-readonly-locked: true
+extensions:
+  - pi-bash-readonly
+---
+```
 
-## Detection
+Behavior:
 
-Agent type is detected at session start via `pi.getActiveTools()`. If the tool list includes `edit` or `write`, the agent is considered write-capable.
+- bash starts in read-only mode
+- `/readonly` cannot disable it
+- the status bar shows `🔒 ro`
 
-This means the behavior is set once at session start and doesn't change if tools are dynamically added or removed mid-session.
+## Toggleable agents
+
+For a write-capable agent that sometimes needs a safer bash mode, leave the lock off:
+
+```yaml
+---
+name: bosun
+bash-readonly: false
+bash-readonly-locked: false
+extensions:
+  - pi-bash-readonly
+---
+```
+
+Behavior:
+
+- bash starts unrestricted
+- `/readonly` toggles between unrestricted and sandboxed bash
+- the tool header shows `🔒` when sandboxing is active
+
+## Frontmatter vs JSON
+
+Frontmatter only controls:
+
+- the initial read-only state
+- whether toggling is locked
+
+JSON config still controls execution details such as:
+
+- local vs configured remote bash execution
+- writable paths
+- network access
+- ssh policy
+
+That split keeps agent identity decisions in frontmatter and execution policy details in config.

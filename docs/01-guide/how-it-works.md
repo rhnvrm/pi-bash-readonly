@@ -1,18 +1,21 @@
 # How it works
 
-## Interception
+## Bash interception
 
-The extension hooks into Pi's `tool_call` event. When a bash tool call fires:
+The extension registers its own `bash` tool with Pi via `createBashTool(...)`.
 
-1. The original command is written to a temp file (`/tmp/pi-bash-ro-<pid>-<ts>-<rand>.sh`) with mode `0o700` (owner-only)
-2. The command is replaced with a bwrap invocation that runs the temp file
-3. After bwrap exits, the temp file is cleaned up in the outer shell
+For sandboxed execution it uses a `spawnHook` that replaces the original shell command with a `bwrap` invocation. There are no temp files anymore — the command is passed through `bash -c` with shell escaping.
 
-Writing to a temp file avoids nested shell quoting issues. The command passes through 4 layers (Pi → bash -c → bwrap → bash), and escaping across all of them is error-prone.
+At a high level, sandboxed execution looks like this:
 
-## The bwrap command
+1. Pi prepares the bash command.
+2. The extension's `spawnHook` wraps it in `bwrap`.
+3. `bwrap` remounts `/` read-only, adds `/dev` and `/proc`, and optionally unshares the network namespace.
+4. The wrapped command runs under `bash -c` inside that sandbox.
 
-A typical invocation looks like:
+## The local bwrap command
+
+A typical invocation looks like this:
 
 ```bash
 bwrap \
@@ -20,25 +23,33 @@ bwrap \
   --ro-bind / / \
   --dev /dev \
   --proc /proc \
-  --ro-bind /tmp/script.sh /tmp/script.sh \
+  --unshare-net \
   --chdir /project \
-  bash /tmp/script.sh
+  bash -c 'ls -la'
 ```
 
 ### Mount breakdown
 
 | Flag | What it does |
 |------|-------------|
-| `--die-with-parent` | Kill the sandbox if the parent Pi process dies. Prevents orphans. |
-| `--ro-bind / /` | Mount the entire root filesystem read-only. This is the core enforcement. |
-| `--dev /dev` | Provide device nodes (`/dev/null`, `/dev/urandom`, etc.) |
-| `--proc /proc` | Provide `/proc` filesystem (process info, `$$`, etc.) |
-| `--ro-bind <script> <script>` | Mount the command script read-only inside the sandbox |
-| `--chdir <cwd>` | Set working directory to match Pi's cwd |
+| `--die-with-parent` | Kill the sandbox if the parent Pi process dies. Prevents orphaned sandboxes. |
+| `--ro-bind / /` | Mount the entire host filesystem read-only inside the sandbox. This is the core write barrier. |
+| `--dev /dev` | Provide common device nodes such as `/dev/null`. |
+| `--proc /proc` | Provide `/proc` so normal shell/process behavior still works. |
+| `--unshare-net` | Isolate TCP/UDP networking unless `sandbox.network` is `true`. |
+| `--chdir <cwd>` | Preserve Pi's working directory inside the sandbox. |
+| `bash -c ...` | Execute the original command without creating temp script files. |
 
-### With writable paths configured
+## Writable paths
 
-When `writable` paths are set in config, additional mounts are added **before** the script mount:
+By default, nothing is writable.
+
+When you configure `sandbox.writable`, the extension adds extra mounts before the command runs:
+
+- `/tmp` becomes `--tmpfs /tmp`, giving the sandbox an isolated ephemeral temp directory.
+- Any other configured path becomes `--bind <path> <path>`, which is a real read-write bind mount to the host path.
+
+Example:
 
 ```bash
 bwrap \
@@ -46,31 +57,60 @@ bwrap \
   --ro-bind / / \
   --dev /dev \
   --proc /proc \
-  --tmpfs /tmp \                              # writable: ["/tmp"]
-  --bind /workspace /workspace \              # writable: ["/workspace"]
-  --ro-bind /tmp/script.sh /tmp/script.sh \   # after tmpfs so it overlays
+  --tmpfs /tmp \
+  --bind /workspace/cache /workspace/cache \
   --chdir /project \
-  bash /tmp/script.sh
+  bash -c 'sort big-file.txt'
 ```
 
-Mount ordering matters: `--tmpfs /tmp` must come before `--ro-bind /tmp/script.sh` so the script file overlays onto the tmpfs rather than being hidden by it.
+## SSH policy shim
 
-## Exit code preservation
+When `sshPolicy.mode` is `"require-remote-bwrap"`, the sandbox also shadows `ssh` with a shim.
 
-The replacement command captures bwrap's exit code and re-exits with it:
+The wrapper does three things:
 
-```bash
-bwrap ...; __exit=$?; rm -f /tmp/script.sh; exit $__exit
-```
+1. Bind-mount the real ssh client to a private internal path.
+2. Bind-mount the shim over the normal `ssh` path inside the sandbox.
+3. Pass policy settings to the shim via environment variables.
 
-The `rm -f` runs in the outer shell (where `/tmp` is the real host `/tmp`), so cleanup always works.
+That lets normal shell commands still call `ssh`, but under a controlled entrypoint.
 
-## What gets blocked
+The shim then:
 
-Any write syscall to a read-only mount returns `EROFS` (Read-only file system). This includes:
+1. Parses ssh argv directly.
+2. Re-execs ssh with a sterile config (`-F /dev/null` plus hardcoded safe options) so normal ssh config aliases and local hooks cannot change the execution path.
+3. Rejects unsupported modes such as interactive `ssh host` or forwarding-heavy flows.
+4. Probes the remote host for `bwrap`.
+5. Re-execs the real ssh client only if the probe succeeds.
+6. Wraps the remote command in `bwrap ... bash -lc ...` on the remote side.
 
-- `echo > file`, `tee`, `dd`
-- `touch`, `mkdir`, `rm`, `mv`, `cp` (to read-only targets)
-- `python -c "open('f','w')"`
-- `perl -e "open(F,'>f')"`
-- Any binary that calls `open(O_WRONLY)`, `write()`, `unlink()`, etc.
+This is how local sandboxed bash can require a remote read-only sandbox before allowing remote execution.
+
+## Configured remote bash mode
+
+When `execution.type` is `"ssh"`, the extension does not use local `bwrap` for command execution.
+
+Instead, it swaps the bash backend to SSH-backed operations:
+
+1. Build a sterile SSH argv (`-F /dev/null` plus safe hardcoded options).
+2. Add any validated `execution.args` from config.
+3. Resolve the remote working directory from `execution.cwd` or remote `pwd`.
+4. Map the local bash cwd onto that remote root.
+5. Execute the command remotely.
+6. If readonly mode is on, require remote `bwrap` first and wrap the remote command inside it.
+
+That means readonly vs unrestricted still works in remote mode — it just happens on the configured remote host instead of locally.
+
+## User bash (`!` / `!!`)
+
+Pi's interactive user bash commands are handled through the `user_bash` event.
+
+The extension returns operations there too, so `!` and `!!` follow the same execution mode as normal bash tool calls: local vs remote, readonly vs unrestricted.
+
+## Fail-closed behavior
+
+If read-only mode is enabled but local `bwrap` is unavailable in local execution mode, the extension does not silently fall back to unrestricted execution.
+
+Instead, bash execution fails closed with an error so the agent cannot escape the intended policy by accident.
+
+In configured remote mode, the analogous fail-closed check is remote `bwrap`: readonly remote bash probes for it first and refuses execution if the remote host does not provide it.

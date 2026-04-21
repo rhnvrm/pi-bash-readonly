@@ -32,6 +32,9 @@
     "@mariozechner/pi-coding-agent": "^0.62.0",
     "@sinclair/typebox": "^0.34.48"
   },
+  "scripts": {
+    "test:ssh-docker": "bash scripts/test-ssh-bwrap.sh"
+  },
   "files": [
     "extensions/",
     "config.ts",
