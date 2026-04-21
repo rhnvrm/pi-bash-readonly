@@ -1,122 +1,225 @@
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { loadConfig } from "../config.js";
+import { loadConfig, mergeConfigLayers, normalizeConfigLayer } from "../config.js";
 
 describe("loadConfig", () => {
 	let dir: string;
+	let warnings: string[];
+	const originalWarn = console.warn;
 
 	beforeEach(() => {
 		dir = mkdtempSync(join(tmpdir(), "pi-bash-ro-config-"));
+		warnings = [];
+		console.warn = (...args: unknown[]) => {
+			warnings.push(args.map(String).join(" "));
+		};
 	});
 
 	afterEach(() => {
+		console.warn = originalWarn;
 		rmSync(dir, { recursive: true, force: true });
 	});
 
-	it("returns defaults when no config file exists", () => {
-		const config = loadConfig(dir);
-		expect(config.writable).toEqual([]);
-		expect(config.enabled).toBeUndefined();
+	it("returns normalized defaults when no config file exists", () => {
+		const config = loadConfig(dir, { projectConfigPath: null, userConfigPath: null });
+		expect(config).toEqual({
+			enabled: undefined,
+			execution: { type: "local" },
+			sandbox: {
+				writable: [],
+				network: false,
+			},
+			sshPolicy: {
+				mode: "require-remote-bwrap",
+			},
+		});
+		expect(warnings).toEqual([]);
 	});
 
-	it("loads writable paths from project config", () => {
-		const piDir = join(dir, ".pi");
-		mkdirSync(piDir, { recursive: true });
-		writeFileSync(join(piDir, "pi-bash-readonly.json"), JSON.stringify({
-			writable: ["/tmp", "/var/data"],
-		}));
-		const config = loadConfig(dir);
-		expect(config.writable).toEqual(["/tmp", "/var/data"]);
-	});
-
-	it("loads enabled field from project config", () => {
-		const piDir = join(dir, ".pi");
-		mkdirSync(piDir, { recursive: true });
-		writeFileSync(join(piDir, "pi-bash-readonly.json"), JSON.stringify({
-			writable: [],
+	it("loads legacy project config into the normalized shape", () => {
+		const projectPath = join(dir, "project.json");
+		writeFileSync(projectPath, JSON.stringify({
 			enabled: false,
+			writable: ["/tmp", "/var/data"],
+			network: true,
 		}));
-		const config = loadConfig(dir);
-		expect(config.enabled).toBe(false);
+
+		const config = loadConfig(dir, { projectConfigPath: projectPath, userConfigPath: null });
+		expect(config).toEqual({
+			enabled: false,
+			execution: { type: "local" },
+			sandbox: {
+				writable: ["/tmp", "/var/data"],
+				network: true,
+			},
+			sshPolicy: {
+				mode: "require-remote-bwrap",
+			},
+		});
+		expect(warnings).toHaveLength(1);
+		expect(warnings[0]).toContain("deprecated config keys");
+	});
+
+	it("loads structured config", () => {
+		const projectPath = join(dir, "project.json");
+		writeFileSync(projectPath, JSON.stringify({
+			enabled: true,
+			execution: { type: "local" },
+			sandbox: {
+				writable: ["/tmp"],
+				network: true,
+			},
+			sshPolicy: {
+				mode: "off",
+			},
+		}));
+
+		const config = loadConfig(dir, { projectConfigPath: projectPath, userConfigPath: null });
+		expect(config).toEqual({
+			enabled: true,
+			execution: { type: "local" },
+			sandbox: {
+				writable: ["/tmp"],
+				network: true,
+			},
+			sshPolicy: {
+				mode: "off",
+			},
+		});
+		expect(warnings).toEqual([]);
+	});
+
+	it("supports ssh execution config in the normalized shape", () => {
+		const projectPath = join(dir, "project.json");
+		writeFileSync(projectPath, JSON.stringify({
+			execution: {
+				type: "ssh",
+				host: "user@example.com",
+				cwd: "/work/project",
+				args: ["-p", "2222", 123],
+			},
+		}));
+
+		const config = loadConfig(dir, { projectConfigPath: projectPath, userConfigPath: null });
+		expect(config.execution).toEqual({
+			type: "ssh",
+			host: "user@example.com",
+			cwd: "/work/project",
+			args: ["-p", "2222"],
+		});
+		expect(config.sandbox.network).toBe(false);
+	});
+
+	it("applies per-layer precedence after normalizing each layer", () => {
+		const userPath = join(dir, "user.json");
+		const projectPath = join(dir, "project.json");
+		writeFileSync(userPath, JSON.stringify({
+			writable: ["/tmp"],
+			network: true,
+		}));
+		writeFileSync(projectPath, JSON.stringify({
+			enabled: false,
+			sandbox: {
+				writable: ["/var/data"],
+			},
+		}));
+
+		const config = loadConfig(dir, { projectConfigPath: projectPath, userConfigPath: userPath });
+		expect(config).toEqual({
+			enabled: false,
+			execution: { type: "local" },
+			sandbox: {
+				writable: ["/var/data"],
+				network: true,
+			},
+			sshPolicy: {
+				mode: "require-remote-bwrap",
+			},
+		});
+		expect(warnings).toHaveLength(1);
 	});
 
 	it("handles malformed JSON gracefully", () => {
-		const piDir = join(dir, ".pi");
-		mkdirSync(piDir, { recursive: true });
-		writeFileSync(join(piDir, "pi-bash-readonly.json"), "not json{{{");
-		const config = loadConfig(dir);
-		expect(config.writable).toEqual([]);
+		const projectPath = join(dir, "project.json");
+		writeFileSync(projectPath, "not json{{{");
+
+		const config = loadConfig(dir, { projectConfigPath: projectPath, userConfigPath: null });
+		expect(config.sandbox.writable).toEqual([]);
 		expect(config.enabled).toBeUndefined();
+		expect(warnings).toEqual([]);
+	});
+});
+
+describe("normalizeConfigLayer", () => {
+	it("filters non-string writable entries", () => {
+		const result = normalizeConfigLayer({
+			sandbox: {
+				writable: ["/tmp", 123, null, "/var"],
+			},
+		}, "test");
+		expect(result.layer.sandbox?.writable).toEqual(["/tmp", "/var"]);
 	});
 
-	it("filters non-string entries from writable", () => {
-		const piDir = join(dir, ".pi");
-		mkdirSync(piDir, { recursive: true });
-		writeFileSync(join(piDir, "pi-bash-readonly.json"), JSON.stringify({
-			writable: ["/tmp", 123, null, "/var"],
-		}));
-		const config = loadConfig(dir);
-		expect(config.writable).toEqual(["/tmp", "/var"]);
-	});
-
-	it("defaults writable to [] when set to non-array", () => {
-		const piDir = join(dir, ".pi");
-		mkdirSync(piDir, { recursive: true });
-		writeFileSync(join(piDir, "pi-bash-readonly.json"), JSON.stringify({
-			writable: "not an array",
-		}));
-		const config = loadConfig(dir);
-		expect(config.writable).toEqual([]);
-	});
-
-	it("defaults network to false when not specified", () => {
-		const config = loadConfig(dir);
-		expect(config.network).toBe(false);
-	});
-
-	it("loads network: true from project config", () => {
-		const piDir = join(dir, ".pi");
-		mkdirSync(piDir, { recursive: true });
-		writeFileSync(join(piDir, "pi-bash-readonly.json"), JSON.stringify({
-			writable: [],
+	it("warns when mixing legacy and structured keys, with structured values winning", () => {
+		const result = normalizeConfigLayer({
+			writable: ["/tmp"],
 			network: true,
-		}));
-		const config = loadConfig(dir);
-		expect(config.network).toBe(true);
-	});
+			sandbox: {
+				writable: ["/var/data"],
+				network: false,
+			},
+		}, "test-config");
 
-	it("loads network: false from project config", () => {
-		const piDir = join(dir, ".pi");
-		mkdirSync(piDir, { recursive: true });
-		writeFileSync(join(piDir, "pi-bash-readonly.json"), JSON.stringify({
-			writable: [],
+		expect(result.layer.sandbox).toEqual({
+			writable: ["/var/data"],
 			network: false,
-		}));
-		const config = loadConfig(dir);
-		expect(config.network).toBe(false);
+		});
+		expect(result.warnings).toHaveLength(2);
+		expect(result.warnings[0]).toContain("deprecated config keys");
+		expect(result.warnings[0]).toContain("test-config");
+		expect(result.warnings[1]).toContain("mixed config styles");
 	});
 
-	it("ignores non-boolean network values", () => {
-		const piDir = join(dir, ".pi");
-		mkdirSync(piDir, { recursive: true });
-		writeFileSync(join(piDir, "pi-bash-readonly.json"), JSON.stringify({
-			writable: [],
-			network: "yes",
-		}));
-		const config = loadConfig(dir);
-		expect(config.network).toBe(false);
+	it("ignores invalid sshPolicy values", () => {
+		const result = normalizeConfigLayer({
+			sshPolicy: {
+				mode: "invalid-mode",
+			},
+		}, "test");
+		expect(result.layer.sshPolicy).toBeUndefined();
+		expect(result.warnings).toEqual([]);
 	});
+});
 
-	it("ignores non-boolean enabled values", () => {
-		const piDir = join(dir, ".pi");
-		mkdirSync(piDir, { recursive: true });
-		writeFileSync(join(piDir, "pi-bash-readonly.json"), JSON.stringify({
-			writable: [],
-			enabled: "yes",
-		}));
-		const config = loadConfig(dir);
-		expect(config.enabled).toBeUndefined();
+describe("mergeConfigLayers", () => {
+	it("merges normalized layers over the default config", () => {
+		const config = mergeConfigLayers(
+			{
+				sandbox: {
+					writable: ["/tmp"],
+					network: true,
+				},
+			},
+			{
+				enabled: false,
+				sshPolicy: {
+					mode: "off",
+				},
+			},
+		);
+
+		expect(config).toEqual({
+			enabled: false,
+			execution: { type: "local" },
+			sandbox: {
+				writable: ["/tmp"],
+				network: true,
+			},
+			sshPolicy: {
+				mode: "off",
+			},
+		});
 	});
 });

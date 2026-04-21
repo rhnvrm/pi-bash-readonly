@@ -43,27 +43,47 @@ The extension reads the agent file using the `PI_AGENT` environment variable. It
 
 Configure via `.pi/pi-bash-readonly.json` (project) or `~/.pi/agent/pi-bash-readonly.json` (user). Project config takes priority.
 
+Preferred structured format:
+
 ```json
 {
-  "writable": ["/tmp"],
   "enabled": true,
+  "execution": { "type": "local" },
+  "sandbox": {
+    "writable": ["/tmp"],
+    "network": false
+  }
+}
+```
+
+Legacy flat format still works:
+
+```json
+{
+  "enabled": true,
+  "writable": ["/tmp"],
   "network": false
 }
 ```
 
+Top-level `writable` and `network` are deprecated. The extension logs a warning to stderr during config load so existing configs keep working while users migrate.
+
 | Key | Default | Description |
 |-----|---------|-------------|
-| `writable` | `[]` | Paths to mount writable inside the sandbox. `/tmp` gets an isolated tmpfs (not the host /tmp). Other paths are bind-mounted read-write. |
 | `enabled` | `true` | Initial sandbox state. Overridden by agent frontmatter. |
-| `network` | `false` | Allow network access inside the sandbox. Default is `false` (network isolated via `--unshare-net`). Set to `true` if agents need to fetch packages, clone repos, or make HTTP requests. |
+| `execution.type` | `"local"` | Current execution mode. Keep this set to `local` unless the docs for a future release explicitly describe additional modes. |
+| `sandbox.writable` | `[]` | Paths to mount writable inside the sandbox. `/tmp` gets an isolated tmpfs (not the host /tmp). Other paths are bind-mounted read-write. |
+| `sandbox.network` | `false` | Allow network access inside the sandbox. Default is `false` (network isolated via `--unshare-net`). Set to `true` if agents need to fetch packages, clone repos, or make HTTP requests. |
 
-Without `"/tmp"` in `writable`, commands like `sort` on large inputs will fail since they need temp space. Add it if your agents run commands that need scratch space.
+Without `"/tmp"` in `sandbox.writable`, commands like `sort` on large inputs will fail since they need temp space. Add it if your agents run commands that need scratch space.
 
 ### Resolution order
 
 1. Agent frontmatter `bash-readonly` field (if `PI_AGENT` is set and agent file found)
 2. Config file `enabled` field
 3. Default: `true` (sandboxed)
+
+Agent frontmatter only controls the initial readonly state and lock. Writable paths and network settings stay in JSON config.
 
 ## Usage
 
@@ -98,7 +118,7 @@ The status bar also shows `🔒 ro` when sandboxed.
 1. Registers a custom `bash` tool using `createBashTool` with a `spawnHook`
 2. The `spawnHook` wraps commands in bwrap via `bash -c` with shell escaping (no temp files)
 3. Intercepts `user_bash` events to sandbox `!` and `!!` commands too
-4. Reads agent frontmatter via `PI_AGENT` env var for per-agent configuration
+4. Reads agent frontmatter plus structured/legacy JSON config for per-agent configuration
 
 ## Requirements
 

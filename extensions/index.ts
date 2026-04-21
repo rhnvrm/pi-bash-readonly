@@ -173,8 +173,12 @@ export default function (pi: ExtensionAPI) {
 		console.warn("[pi-bash-readonly] bwrap not found — falling back to unrestricted bash");
 	}
 
+	if (config.execution.type !== "local") {
+		console.warn(`[pi-bash-readonly] execution.type=${config.execution.type} is not implemented yet — using local execution`);
+	}
+
 	// Resolve writable paths, skip non-existent ones
-	const writablePaths = config.writable.filter((p) => {
+	const writablePaths = config.sandbox.writable.filter((p) => {
 		if (!existsSync(p)) {
 			console.warn(`[pi-bash-readonly] writable path does not exist, skipping: ${p}`);
 			return false;
@@ -189,7 +193,7 @@ export default function (pi: ExtensionAPI) {
 
 	// Create both tool variants
 	const localBash = createBashTool(cwd);
-	const bwrapOptions = { network: config.network };
+	const bwrapOptions = { network: config.sandbox.network };
 	const sandboxedBash = createBashTool(cwd, {
 		spawnHook: ({ command, cwd: spawnCwd, env }) => ({
 			command: buildBwrapCommand(command, spawnCwd, writablePaths, bwrapOptions),
