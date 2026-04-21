@@ -10,7 +10,7 @@ pi install npm:pi-bash-readonly
 
 ## What it does
 
-Every `bash` tool call is wrapped in a bwrap sub-sandbox where the entire filesystem is mounted read-only (`--ro-bind / /`). By default, **nothing is writable** and **network is isolated** via `--unshare-net`.
+In local execution mode, every `bash` tool call is wrapped in a bwrap sub-sandbox where the entire filesystem is mounted read-only (`--ro-bind / /`). By default, **nothing is writable** and **network is isolated** via `--unshare-net`.
 
 This uses Linux mount and network namespaces. Unlike regex-based command filtering, writes are blocked at the filesystem level and TCP/UDP network access is blocked via namespace isolation — from any language runtime (Python, Perl, dd, etc.).
 
@@ -172,6 +172,8 @@ That command starts two disposable sshd containers:
 - `without-bwrap` — intentionally lacks `bwrap`
 
 This validates the SSH policy and configured-remote dispatch behavior end to end. It does **not** prove full nested remote namespace isolation inside Docker; the `with-bwrap` target uses a small stub instead of a privileged real `bwrap` sandbox.
+
+The harness tries to choose writable runtime, temp, and Docker state directories automatically. In heavily constrained readonly environments it may print a skip message instead of running. Set `PI_BASH_RO_DOCKER_TESTS_STRICT=1` in CI or other strict validation environments if you want that condition to fail the command.
 
 ## Requirements
 
